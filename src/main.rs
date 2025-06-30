@@ -230,6 +230,10 @@ async fn mint_token(
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
     };
 
+    if(req.amount == 0) {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(" ".to_string())))
+    }
+
     // Derive the associated token account for the destination
     let destination_ata = get_associated_token_address(&destination, &mint);
 
