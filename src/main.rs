@@ -8,7 +8,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::Instruction,
-    program_pack::Pack,
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
     system_instruction,
@@ -135,10 +134,31 @@ struct InstructionResponse {
 }
 
 #[derive(Serialize)]
+struct SendSolInstructionResponse {
+    program_id: String,
+    accounts: Vec<String>,
+    instruction_data: String,
+}
+
+#[derive(Serialize)]
+struct SendTokenInstructionResponse {
+    program_id: String,
+    accounts: Vec<AccountInfoCamelCase>,
+    instruction_data: String,
+}
+
+#[derive(Serialize)]
 struct AccountInfo {
     pubkey: String,
     is_signer: bool,
     is_writable: bool,
+}
+
+#[derive(Serialize)]
+struct AccountInfoCamelCase {
+    pubkey: String,
+    #[serde(rename = "isSigner")]
+    is_signer: bool,
 }
 
 // Helper functions
@@ -230,10 +250,6 @@ async fn mint_token(
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
     };
 
-    if(req.amount == 0) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(" ".to_string())))
-    }
-
     // Derive the associated token account for the destination
     let destination_ata = get_associated_token_address(&destination, &mint);
 
@@ -324,12 +340,12 @@ async fn send_sol(
     // Validate inputs
     let from = match validate_pubkey(&req.from) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SendSolInstructionResponse>::error(e.to_string()))),
     };
     
     let to = match validate_pubkey(&req.to) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SendSolInstructionResponse>::error(e.to_string()))),
     };
 
     // Check valid inputs:
@@ -337,7 +353,7 @@ async fn send_sol(
     if from == to {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<InstructionResponse>::error(
+            Json(ApiResponse::<SendSolInstructionResponse>::error(
                 ServerError::InvalidAddresses("From and to addresses must be different".to_string()).to_string()
             )),
         );
@@ -347,12 +363,17 @@ async fn send_sol(
     if req.lamports == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<InstructionResponse>::error(ServerError::InvalidAmount.to_string())),
+            Json(ApiResponse::<SendSolInstructionResponse>::error(ServerError::InvalidAmount.to_string())),
         );
     }
 
     let transfer_ix = system_instruction::transfer(&from, &to, req.lamports);
-    let response = instruction_to_response(transfer_ix);
+    
+    let response = SendSolInstructionResponse {
+        program_id: transfer_ix.program_id.to_string(),
+        accounts: transfer_ix.accounts.iter().map(|acc| acc.pubkey.to_string()).collect(),
+        instruction_data: general_purpose::STANDARD.encode(&transfer_ix.data),
+    };
 
     (StatusCode::OK, Json(ApiResponse::success(response)))
 }
@@ -362,23 +383,23 @@ async fn send_token(
 ) -> impl IntoResponse {
     let destination = match validate_pubkey(&req.destination) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SendTokenInstructionResponse>::error(e.to_string()))),
     };
     
     let mint = match validate_pubkey(&req.mint) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SendTokenInstructionResponse>::error(e.to_string()))),
     };
     
     let owner = match validate_pubkey(&req.owner) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SendTokenInstructionResponse>::error(e.to_string()))),
     };
 
     if req.amount == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<InstructionResponse>::error(ServerError::InvalidAmount.to_string())),
+            Json(ApiResponse::<SendTokenInstructionResponse>::error(ServerError::InvalidAmount.to_string())),
         );
     }
 
@@ -397,9 +418,14 @@ async fn send_token(
     )
     .unwrap();
 
-    // Note: The response format shows "isSigner" in camelCase in the example,
-    // but I'm using snake_case as per Rust conventions. Let me know if you need camelCase.
-    let response = instruction_to_response(transfer_ix);
+    let response = SendTokenInstructionResponse {
+        program_id: transfer_ix.program_id.to_string(),
+        accounts: transfer_ix.accounts.iter().map(|acc| AccountInfoCamelCase {
+            pubkey: acc.pubkey.to_string(),
+            is_signer: acc.is_signer,
+        }).collect(),
+        instruction_data: general_purpose::STANDARD.encode(&transfer_ix.data),
+    };
 
     (StatusCode::OK, Json(ApiResponse::success(response)))
 }
