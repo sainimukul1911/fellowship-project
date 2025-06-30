@@ -35,28 +35,30 @@ enum ServerError {
 }
 
 #[derive(Serialize)]
-struct ApiResponse<T> {
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+#[serde(untagged)]
+enum ApiResponse<T> {
+    Success {
+        success: bool,
+        data: T,
+    },
+    Error {
+        success: bool,
+        error: String,
+    }
 }
 
 impl<T> ApiResponse<T> {
     fn success(data: T) -> Self {
-        Self {
+        ApiResponse::Success {
             success: true,
-            data: Some(data),
-            error: None,
+            data,
         }
     }
 
-    fn error(msg: String) -> ApiResponse<T> {
-        ApiResponse {
+    fn error(msg: String) -> Self {
+        ApiResponse::Error {
             success: false,
-            data: None,
-            error: Some(msg),
+            error: msg,
         }
     }
 }
@@ -159,10 +161,14 @@ struct AccountInfoCamelCase {
     pubkey: String,
     #[serde(rename = "isSigner")]
     is_signer: bool,
+    // Note: is_writable is intentionally omitted as per requirements
 }
 
 // Helper functions
 fn validate_pubkey(key: &str) -> Result<Pubkey, ServerError> {
+    if key.is_empty() {
+        return Err(ServerError::InvalidPubkey("empty public key".to_string()));
+    }
     Pubkey::from_str(key).map_err(|_| ServerError::InvalidPubkey(key.to_string()))
 }
 
@@ -273,7 +279,7 @@ async fn sign_message(
     if req.message.is_empty() || req.secret.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<SignMessageResponse>::error(ServerError::MissingFields.to_string())),
+            Json(ApiResponse::<SignMessageResponse>::error("Missing required fields".to_string())),
         );
     }
 
@@ -307,7 +313,7 @@ async fn verify_message(
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<VerifyMessageResponse>::error(ServerError::InvalidSignature.to_string())),
+                Json(ApiResponse::<VerifyMessageResponse>::error("Invalid signature".to_string())),
             )
         }
     };
@@ -317,7 +323,7 @@ async fn verify_message(
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<VerifyMessageResponse>::error(ServerError::InvalidSignature.to_string())),
+                Json(ApiResponse::<VerifyMessageResponse>::error("Invalid signature".to_string())),
             )
         }
     };
@@ -363,7 +369,7 @@ async fn send_sol(
     if req.lamports == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<SendSolInstructionResponse>::error(ServerError::InvalidAmount.to_string())),
+            Json(ApiResponse::<SendSolInstructionResponse>::error("Invalid amount".to_string())),
         );
     }
 
@@ -399,7 +405,7 @@ async fn send_token(
     if req.amount == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<SendTokenInstructionResponse>::error(ServerError::InvalidAmount.to_string())),
+            Json(ApiResponse::<SendTokenInstructionResponse>::error("Invalid amount".to_string())),
         );
     }
 
