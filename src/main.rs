@@ -38,28 +38,30 @@ enum ServerError {
 #[derive(Serialize)]
 struct ApiResponse<T> {
     success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    data: T,
+}
+struct ApiResponse2<T> {
+    success: bool,
+    error: String,
+}
+
+impl<T> ApiResponse2<T> {
+    fn error(msg: String) -> ApiResponse2<T> {
+        ApiResponse2 {
+            success: false,
+            error: msg,
+        }
+    }
 }
 
 impl<T> ApiResponse<T> {
     fn success(data: T) -> Self {
         Self {
             success: true,
-            data: Some(data),
-            error: None,
+            data
         }
     }
 
-    fn error(msg: String) -> ApiResponse<T> {
-        ApiResponse {
-            success: false,
-            data: None,
-            error: Some(msg),
-        }
-    }
 }
 
 // Request/Response structures
@@ -188,12 +190,12 @@ async fn create_token(
 ) -> impl IntoResponse {
     let mint_authority = match validate_pubkey(&req.mint_authority) {
         Ok(key) => key,
-        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string())))),
+        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string())))),
     };
     
     let mint_pubkey = match validate_pubkey(&req.mint) {
         Ok(key) => key,
-        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string())))),
+        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string())))),
     };
 
     let rent = solana_sdk::rent::Rent::default();
@@ -229,17 +231,17 @@ async fn mint_token(
 ) -> impl IntoResponse {
     let mint = match validate_pubkey(&req.mint) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
     
     let destination = match validate_pubkey(&req.destination) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
     
     let authority = match validate_pubkey(&req.authority) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
 
     // Derive the associated token account for the destination
@@ -265,13 +267,13 @@ async fn sign_message(
     if req.message.is_empty() || req.secret.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<SignMessageResponse>::error(ServerError::MissingFields.to_string())),
+            Json(ApiResponse2::<SignMessageResponse>::error(ServerError::MissingFields.to_string())),
         );
     }
 
     let keypair = match validate_keypair(&req.secret) {
         Ok(kp) => kp,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SignMessageResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<SignMessageResponse>::error(e.to_string()))),
     };
 
     let message_bytes = req.message.as_bytes();
@@ -291,7 +293,7 @@ async fn verify_message(
 ) -> impl IntoResponse {
     let pubkey = match validate_pubkey(&req.pubkey) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<VerifyMessageResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<VerifyMessageResponse>::error(e.to_string()))),
     };
 
     let signature_bytes = match general_purpose::STANDARD.decode(&req.signature) {
@@ -299,7 +301,7 @@ async fn verify_message(
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<VerifyMessageResponse>::error(ServerError::InvalidSignature.to_string())),
+                Json(ApiResponse2::<VerifyMessageResponse>::error(ServerError::InvalidSignature.to_string())),
             )
         }
     };
@@ -309,7 +311,7 @@ async fn verify_message(
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<VerifyMessageResponse>::error(ServerError::InvalidSignature.to_string())),
+                Json(ApiResponse2::<VerifyMessageResponse>::error(ServerError::InvalidSignature.to_string())),
             )
         }
     };
@@ -332,12 +334,12 @@ async fn send_sol(
     // Validate inputs
     let from = match validate_pubkey(&req.from) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
     
     let to = match validate_pubkey(&req.to) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
 
     // Check valid inputs:
@@ -345,7 +347,7 @@ async fn send_sol(
     if from == to {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<InstructionResponse>::error(
+            Json(ApiResponse2::<InstructionResponse>::error(
                 ServerError::InvalidAddresses("From and to addresses must be different".to_string()).to_string()
             )),
         );
@@ -355,7 +357,7 @@ async fn send_sol(
     if req.lamports == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<InstructionResponse>::error(ServerError::InvalidAmount.to_string())),
+            Json(ApiResponse2::<InstructionResponse>::error(ServerError::InvalidAmount.to_string())),
         );
     }
 
@@ -370,23 +372,23 @@ async fn send_token(
 ) -> impl IntoResponse {
     let destination = match validate_pubkey(&req.destination) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
     
     let mint = match validate_pubkey(&req.mint) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
     
     let owner = match validate_pubkey(&req.owner) {
         Ok(key) => key,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse2::<InstructionResponse>::error(e.to_string()))),
     };
 
     if req.amount == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<InstructionResponse>::error(ServerError::InvalidAmount.to_string())),
+            Json(ApiResponse2::<InstructionResponse>::error(ServerError::InvalidAmount.to_string())),
         );
     }
 
