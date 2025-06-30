@@ -188,12 +188,12 @@ async fn create_token(
 ) -> impl IntoResponse {
     let mint_authority = match validate_pubkey(&req.mint_authority) {
         Ok(key) => key,
-        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse::error(e.to_string())))),
+        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string())))),
     };
     
     let mint_pubkey = match validate_pubkey(&req.mint) {
         Ok(key) => key,
-        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse::error(e.to_string())))),
+        Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string())))),
     };
 
     let rent = solana_sdk::rent::Rent::default();
