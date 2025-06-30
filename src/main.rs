@@ -22,16 +22,20 @@ use base64::{Engine as _, engine::general_purpose};
 enum ServerError {
     #[error("Invalid public key: {0}")]
     InvalidPubkey(String),
-    #[error("Invalid secret key")]
+    #[error("Invalid secret key: must be 64-byte base58")]
     InvalidSecretKey,
     #[error("Invalid signature")]
     InvalidSignature,
     #[error("Missing required fields")]
     MissingFields,
-    #[error("Invalid amount")]
+    #[error("Invalid amount: must be positive")]
     InvalidAmount,
     #[error("Invalid addresses: {0}")]
     InvalidAddresses(String),
+    #[error("Decimals must be between 0-9")]
+    InvalidDecimals,
+    #[error("Signing error")]
+    SigningError,
 }
 
 #[derive(Serialize)]
@@ -143,9 +147,18 @@ struct SendSolInstructionResponse {
 }
 
 #[derive(Serialize)]
+struct AccountMetaResponse {
+    pubkey: String,
+    #[serde(rename = "isSigner")]
+    is_signer: bool,
+    #[serde(rename = "isWritable")]
+    is_writable: bool,
+}
+
+#[derive(Serialize)]
 struct SendTokenInstructionResponse {
     program_id: String,
-    accounts: Vec<AccountInfoCamelCase>,
+    accounts: Vec<AccountMetaResponse>,
     instruction_data: String,
 }
 
@@ -154,14 +167,6 @@ struct AccountInfo {
     pubkey: String,
     is_signer: bool,
     is_writable: bool,
-}
-
-#[derive(Serialize)]
-struct AccountInfoCamelCase {
-    pubkey: String,
-    #[serde(rename = "isSigner")]
-    is_signer: bool,
-    // Note: is_writable is intentionally omitted as per requirements
 }
 
 // Helper functions
@@ -213,6 +218,7 @@ async fn generate_keypair() -> impl IntoResponse {
 async fn create_token(
     Json(req): Json<CreateTokenRequest>,
 ) -> impl IntoResponse {
+    // Validate inputs
     let mint_authority = match validate_pubkey(&req.mint_authority) {
         Ok(key) => key,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
@@ -222,6 +228,16 @@ async fn create_token(
         Ok(key) => key,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
     };
+
+    // Validate decimals
+    if req.decimals > 9 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<InstructionResponse>::error(
+                ServerError::InvalidDecimals.to_string()
+            )),
+        );
+    }
 
     // Initialize mint instruction
     let init_mint_ix = token_instruction::initialize_mint(
@@ -233,7 +249,7 @@ async fn create_token(
     )
     .unwrap();
 
-    // Return the initialize mint instruction as requested
+    // Return the initialize mint instruction
     let response = instruction_to_response(init_mint_ix);
     (StatusCode::OK, Json(ApiResponse::success(response)))
 }
@@ -241,6 +257,7 @@ async fn create_token(
 async fn mint_token(
     Json(req): Json<MintTokenRequest>,
 ) -> impl IntoResponse {
+    // Validate inputs
     let mint = match validate_pubkey(&req.mint) {
         Ok(key) => key,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
@@ -255,6 +272,16 @@ async fn mint_token(
         Ok(key) => key,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<InstructionResponse>::error(e.to_string()))),
     };
+
+    // Validate amount
+    if req.amount == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<InstructionResponse>::error(
+                ServerError::InvalidAmount.to_string()
+            )),
+        );
+    }
 
     // Derive the associated token account for the destination
     let destination_ata = get_associated_token_address(&destination, &mint);
@@ -289,7 +316,9 @@ async fn sign_message(
     };
 
     let message_bytes = req.message.as_bytes();
-    let signature = keypair.sign_message(message_bytes);
+    let signature = keypair.try_sign_message(message_bytes)
+        .map_err(|_| ServerError::SigningError)
+        .unwrap();
 
     let response = SignMessageResponse {
         signature: general_purpose::STANDARD.encode(signature.as_ref()),
@@ -369,7 +398,9 @@ async fn send_sol(
     if req.lamports == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<SendSolInstructionResponse>::error("Invalid amount".to_string())),
+            Json(ApiResponse::<SendSolInstructionResponse>::error(
+                ServerError::InvalidAmount.to_string()
+            )),
         );
     }
 
@@ -387,6 +418,7 @@ async fn send_sol(
 async fn send_token(
     Json(req): Json<SendTokenRequest>,
 ) -> impl IntoResponse {
+    // Validate inputs
     let destination = match validate_pubkey(&req.destination) {
         Ok(key) => key,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SendTokenInstructionResponse>::error(e.to_string()))),
@@ -402,10 +434,13 @@ async fn send_token(
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<SendTokenInstructionResponse>::error(e.to_string()))),
     };
 
+    // Validate amount
     if req.amount == 0 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<SendTokenInstructionResponse>::error("Invalid amount".to_string())),
+            Json(ApiResponse::<SendTokenInstructionResponse>::error(
+                ServerError::InvalidAmount.to_string()
+            )),
         );
     }
 
@@ -413,7 +448,7 @@ async fn send_token(
     let source_ata = get_associated_token_address(&owner, &mint);
     let destination_ata = get_associated_token_address(&destination, &mint);
 
-    // Create transfer instruction
+    // Create transfer instruction with correct account order
     let transfer_ix = token_instruction::transfer(
         &TOKEN_PROGRAM_ID,
         &source_ata,
@@ -424,11 +459,13 @@ async fn send_token(
     )
     .unwrap();
 
+    // Create response with correct account metadata
     let response = SendTokenInstructionResponse {
         program_id: transfer_ix.program_id.to_string(),
-        accounts: transfer_ix.accounts.iter().map(|acc| AccountInfoCamelCase {
+        accounts: transfer_ix.accounts.iter().map(|acc| AccountMetaResponse {
             pubkey: acc.pubkey.to_string(),
             is_signer: acc.is_signer,
+            is_writable: acc.is_writable,
         }).collect(),
         instruction_data: general_purpose::STANDARD.encode(&transfer_ix.data),
     };
@@ -475,6 +512,6 @@ mod tests {
         let message = "Hello, Solana!";
         let signature = keypair.sign_message(message.as_bytes());
         
-        assert!(signature.verify(keypair.pubkey().as_ref(), message.as_bytes()));
+        assert!(keypair.pubkey().verify(message.as_bytes(), &signature));
     }
 }
